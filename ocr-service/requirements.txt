@@ -1,5 +1,7 @@
+setuptools>=65.0
+numpy<2.0
 paddleocr==2.7.3
-paddlepaddle==2.6.1
+paddlepaddle==2.6.2
 fastapi==0.115.6
 uvicorn[standard]==0.32.1
 pydantic==2.10.4
