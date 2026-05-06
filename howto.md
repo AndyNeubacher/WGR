@@ -1,4 +1,5 @@
 # What's there
+pnpm dev:all
 
 ## Frontend (mobile-first, German only)
 

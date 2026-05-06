@@ -2,10 +2,10 @@
 PaddleOCR sidecar — extracts serial number + consumed volume from a meter photo.
 
 The Node.js worker calls POST /ocr with {"path": "<absolute filesystem path>"}.
-This service runs PaddleOCR on the image, then applies two cheap heuristics on
-the recognised tokens to guess the serial and the volume. The technician
-verifies and corrects in the UI, so the heuristics only need to be useful, not
-perfect.
+This service first attempts to detect and decode 2D barcodes (QR codes, DataMatrix, etc.)
+If a barcode is found with the expected format (serialnumber;calibration-month;calibration-year;type;),
+the serial number is extracted from it. Otherwise, falls back to PaddleOCR + heuristics.
+The technician verifies and corrects in the UI, so the heuristics only need to be useful, not perfect.
 """
 import re
 from typing import Optional
@@ -13,6 +13,8 @@ from typing import Optional
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from paddleocr import PaddleOCR
+from pyzbar import pyzbar
+import cv2
 
 # `lang='german'` includes Latin diacritics; for digit-heavy meter dials this
 # is rarely better than 'en', but it's the right default for a German market.
@@ -42,8 +44,32 @@ def health():
     return {'status': 'ok'}
 
 
+def detect_barcode(path: str) -> Optional[str]:
+    """
+    Attempt to detect and decode 2D barcodes (QR codes, DataMatrix, etc.) from image.
+    Expected format: "serialnumber;calibration-month;calibration-year;type;"
+    Returns the serial number if barcode is found and valid, None otherwise.
+    """
+    try:
+        image = cv2.imread(path)
+        if image is None:
+            return None
+        decoded_objects = pyzbar.decode(image)
+        for obj in decoded_objects:
+            data = obj.data.decode('utf-8')
+            parts = data.split(';')
+            if len(parts) >= 1 and parts[0]:
+                return parts[0]
+    except Exception:
+        pass
+    return None
+
+
 @app.post('/ocr', response_model=OcrResponse)
 def run_ocr(req: OcrRequest):
+    # Try barcode detection first
+    barcode_serial = detect_barcode(req.path)
+
     try:
         result = ocr.ocr(req.path, cls=True)
     except Exception as e:
@@ -64,8 +90,11 @@ def run_ocr(req: OcrRequest):
             ))
             texts.append(text)
 
+    # Use barcode serial if found, otherwise fall back to OCR heuristic
+    serial_number = barcode_serial or pick_serial(texts)
+
     return OcrResponse(
-        serialNumber=pick_serial(texts),
+        serialNumber=serial_number,
         consumedVolume=pick_volume(texts),
         raw=raw,
     )
