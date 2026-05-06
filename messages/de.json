@@ -1,0 +1,59 @@
+{
+  "app": {
+    "title": "Wasserzähler-Erfassung",
+    "subtitle": "Foto aufnehmen und Daten erfassen"
+  },
+  "nav": {
+    "capture": "Neue Erfassung",
+    "readings": "Erfassungen"
+  },
+  "capture": {
+    "title": "Neue Erfassung",
+    "instructions": "Foto vom Wasserzähler aufnehmen oder aus der Galerie wählen.",
+    "takePhoto": "Foto aufnehmen",
+    "fromGallery": "Aus Galerie wählen",
+    "review": "Vorschau",
+    "discard": "Verwerfen",
+    "upload": "Hochladen",
+    "uploading": "Wird hochgeladen ...",
+    "queuedOffline": "Offline – wird hochgeladen, sobald wieder Verbindung besteht."
+  },
+  "verify": {
+    "title": "Daten überprüfen",
+    "ocrPending": "OCR läuft – bitte warten ...",
+    "ocrFailed": "OCR fehlgeschlagen. Daten bitte manuell eintragen.",
+    "serialNumber": "Seriennummer",
+    "consumedVolume": "Verbrauch (m³)",
+    "technicianNote": "Notiz",
+    "auxiliaryPhotos": "Zusatzfotos",
+    "addAuxiliary": "Weiteres Foto hinzufügen",
+    "addAuxiliaryHint": "Zusatzfotos werden gespeichert, aber nicht für die OCR verwendet.",
+    "save": "Speichern",
+    "saveAndConfirm": "Speichern und bestätigen",
+    "verified": "Bestätigt am {date}"
+  },
+  "readings": {
+    "title": "Erfassungen",
+    "empty": "Noch keine Erfassungen vorhanden.",
+    "statusPending": "OCR läuft",
+    "statusDone": "Bereit zur Prüfung",
+    "statusFailed": "OCR fehlgeschlagen",
+    "verified": "Bestätigt"
+  },
+  "errors": {
+    "uploadFailed": "Hochladen fehlgeschlagen.",
+    "loadFailed": "Daten konnten nicht geladen werden.",
+    "deleteFailed": "Löschen fehlgeschlagen.",
+    "saveFailed": "Speichern fehlgeschlagen."
+  },
+  "queue": {
+    "pending": "{count} Upload(s) in der Warteschlange",
+    "online": "Online",
+    "offline": "Offline"
+  },
+  "common": {
+    "back": "Zurück",
+    "delete": "Löschen",
+    "cancel": "Abbrechen"
+  }
+}

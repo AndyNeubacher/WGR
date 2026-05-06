@@ -1,0 +1,14 @@
+node_modules
+.next
+.next-build
+dist
+.env
+.env.local
+storage/
+prisma/migrations/dev.db*
+*.log
+.DS_Store
+ocr-service/__pycache__
+ocr-service/.venv
+ocr-service/*.egg-info
+next-env.d.ts

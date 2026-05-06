@@ -1,0 +1,74 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+enum OcrStatus {
+  pending
+  done
+  failed
+}
+
+enum JobStatus {
+  pending
+  running
+  done
+  failed
+}
+
+model Reading {
+  id             String    @id @default(uuid()) @db.Char(36)
+  primaryPhotoId String?   @unique @db.Char(36)
+  primaryPhoto   Photo?    @relation("ReadingPrimary", fields: [primaryPhotoId], references: [id], onDelete: SetNull)
+  serialNumber   String?   @db.VarChar(64)
+  consumedVolume Decimal?  @db.Decimal(12, 3)
+  ocrStatus      OcrStatus @default(pending)
+  ocrRawJson     Json?
+  technicianNote String?   @db.Text
+  createdAt      DateTime  @default(now())
+  verifiedAt     DateTime?
+
+  // Reserved for task 3 — nullable until then.
+  gaugeId      String? @db.Char(36)
+  technicianId String? @db.Char(36)
+
+  photos Photo[] @relation("ReadingPhotos")
+
+  @@index([createdAt])
+  @@map("readings")
+}
+
+model Photo {
+  id        String   @id @default(uuid()) @db.Char(36)
+  readingId String   @db.Char(36)
+  reading   Reading  @relation("ReadingPhotos", fields: [readingId], references: [id], onDelete: Cascade)
+  path      String   @db.VarChar(255)
+  caption   String?  @db.VarChar(255)
+  createdAt DateTime @default(now())
+
+  primaryFor Reading? @relation("ReadingPrimary")
+
+  @@index([readingId])
+  @@map("photos")
+}
+
+model Job {
+  id          String    @id @default(uuid()) @db.Char(36)
+  type        String    @db.VarChar(64)
+  payloadJson Json
+  status      JobStatus @default(pending)
+  attempts    Int       @default(0)
+  runAt       DateTime  @default(now())
+  lockedBy    String?   @db.VarChar(64)
+  lockedUntil DateTime?
+  lastError   String?   @db.Text
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([status, runAt])
+  @@map("jobs")
+}
