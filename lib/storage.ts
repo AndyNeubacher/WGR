@@ -1,6 +1,10 @@
 import path from 'node:path';
 import fs from 'node:fs/promises';
+import { createWriteStream } from 'node:fs';
 import { randomUUID } from 'node:crypto';
+import { Readable } from 'node:stream';
+import type { ReadableStream as NodeReadableStream } from 'node:stream/web';
+import { pipeline } from 'node:stream/promises';
 
 const STORAGE_ROOT = process.env.STORAGE_ROOT
   ? path.resolve(process.env.STORAGE_ROOT)
@@ -46,8 +50,10 @@ export async function savePhoto(
   const filename = `${randomUUID()}.${extFromMime(file.type)}`;
   const relPath = path.posix.join(yyyy, mm, filename);
   const absPath = path.join(dir, filename);
-  const buffer = Buffer.from(await file.arrayBuffer());
-  await fs.writeFile(absPath, buffer);
+  await pipeline(
+    Readable.fromWeb(file.stream() as unknown as NodeReadableStream<Uint8Array>),
+    createWriteStream(absPath),
+  );
   return { path: relPath, absolutePath: absPath };
 }
 

@@ -1,12 +1,16 @@
 import Link from 'next/link';
 import { prisma } from '@/lib/db';
+import { currentUser } from '@/lib/auth';
 import { readingToDto } from '@/lib/dto';
 import { t } from '@/lib/i18n';
 
 export const dynamic = 'force-dynamic';
 
 export default async function ReadingsPage() {
+  const user = await currentUser();
+
   const readings = await prisma.reading.findMany({
+    where: { technicianId: user.id },
     orderBy: { createdAt: 'desc' },
     take: 50,
     include: { photos: true, primaryPhoto: true },

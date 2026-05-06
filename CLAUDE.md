@@ -205,8 +205,14 @@ The manager uses the web app on the desktop computer which is connected to the i
 7. The manager can add notes to the customer site
 
 ### Task 3
-1. Login with username and password to the web app
-2. List of customer sites
-3. For each customer site, list of gauges
-4. For each gauge, a button to take a photo
-5. A button to submit the data
+1. The manager can create different user accounts
+2. all password user credentials are stored encrypted in the database
+3. The manager can assign technician users to sites
+4. The manager can assign specific gauges to technicians
+5. the technician will only see the gauges that are assigned to him
+
+### Task 4
+1. Create a Login page 
+2. After user logs in, the technician can see all the gauges that are assigned to him
+3. For each gauge, a button to take a photo
+4. A button to submit the data

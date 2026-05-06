@@ -20,6 +20,11 @@ enum JobStatus {
   failed
 }
 
+enum UserRole {
+  technician
+  manager
+}
+
 model Reading {
   id             String    @id @default(uuid()) @db.Char(36)
   primaryPhotoId String?   @unique @db.Char(36)
@@ -32,8 +37,8 @@ model Reading {
   createdAt      DateTime  @default(now())
   verifiedAt     DateTime?
 
-  // Reserved for task 3 — nullable until then.
   gaugeId      String? @db.Char(36)
+  gauge        Gauge?  @relation("GaugeReadings", fields: [gaugeId], references: [id], onDelete: SetNull)
   technicianId String? @db.Char(36)
 
   photos Photo[] @relation("ReadingPhotos")
@@ -71,4 +76,79 @@ model Job {
 
   @@index([status, runAt])
   @@map("jobs")
+}
+
+model Note {
+  id         String   @id @default(uuid()) @db.Char(36)
+  targetType String   @db.VarChar(32) // 'photo', 'serialNumber', 'gauge', 'site'
+  targetId   String   @db.Char(36)
+  body       String   @db.Text
+  authorId   String   @db.Char(36)
+  createdAt  DateTime @default(now())
+
+  @@index([targetType, targetId])
+  @@map("notes")
+}
+
+model User {
+  id           String   @id @default(uuid()) @db.Char(36)
+  name         String   @db.VarChar(128)
+  email        String   @unique @db.VarChar(255)
+  passwordHash String   @db.VarChar(255)
+  role         UserRole @default(technician)
+  createdAt    DateTime @default(now())
+
+  assignments TechnicianGauge[]
+
+  @@map("users")
+}
+
+model Customer {
+  id        String   @id @default(uuid()) @db.Char(36)
+  name      String   @db.VarChar(255)
+  createdAt DateTime @default(now())
+
+  sites Site[]
+
+  @@map("customers")
+}
+
+model Site {
+  id         String   @id @default(uuid()) @db.Char(36)
+  customerId String   @db.Char(36)
+  customer   Customer @relation(fields: [customerId], references: [id])
+  name       String   @db.VarChar(255)
+  address    String?  @db.VarChar(500)
+  createdAt  DateTime @default(now())
+
+  gauges Gauge[]
+
+  @@index([customerId])
+  @@map("sites")
+}
+
+model Gauge {
+  id        String   @id @default(uuid()) @db.Char(36)
+  siteId    String   @db.Char(36)
+  site      Site     @relation(fields: [siteId], references: [id])
+  label     String   @db.VarChar(255)
+  createdAt DateTime @default(now())
+
+  readings    Reading[]         @relation("GaugeReadings")
+  assignments TechnicianGauge[]
+
+  @@index([siteId])
+  @@map("gauges")
+}
+
+model TechnicianGauge {
+  technicianId String   @db.Char(36)
+  gaugeId      String   @db.Char(36)
+  assignedAt   DateTime @default(now())
+
+  technician User  @relation(fields: [technicianId], references: [id], onDelete: Cascade)
+  gauge      Gauge @relation(fields: [gaugeId], references: [id], onDelete: Cascade)
+
+  @@id([technicianId, gaugeId])
+  @@map("technician_gauges")
 }

@@ -1,5 +1,6 @@
 'use client';
 import { useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import { useForm } from 'react-hook-form';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Button } from '@/components/ui/button';
@@ -18,6 +19,7 @@ type FormShape = {
 
 export function VerifyForm({ id }: { id: string }) {
   const qc = useQueryClient();
+  const router = useRouter();
   const { data, isLoading } = useQuery({
     queryKey: ['reading', id],
     queryFn: () => fetchReading(id),
@@ -50,8 +52,13 @@ export function VerifyForm({ id }: { id: string }) {
         verified,
       });
     },
-    onSuccess: (next) => {
+    onSuccess: (next, variables) => {
       qc.setQueryData(['reading', id], next);
+      // After confirming a reading, send the technician back to the gauge list
+      // — that's the natural next-step in the flow (next gauge to read).
+      if (variables.verified) {
+        router.push('/gauges');
+      }
     },
   });
 

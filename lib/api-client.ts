@@ -25,10 +25,11 @@ export async function fetchReadings(): Promise<ReadingDto[]> {
   return res.json();
 }
 
-export async function createReading(file: File): Promise<ReadingDto> {
+export async function createReading(file: File, gaugeId?: string): Promise<ReadingDto> {
   const fd = new FormData();
   fd.append('file', file);
-  const res = await fetch('/api/readings', { method: 'POST', body: fd });
+  const url = gaugeId ? `/api/readings?gaugeId=${encodeURIComponent(gaugeId)}` : '/api/readings';
+  const res = await fetch(url, { method: 'POST', body: fd });
   if (!res.ok) throw new HttpError(res.status, `Upload failed: ${res.status}`);
   return res.json();
 }

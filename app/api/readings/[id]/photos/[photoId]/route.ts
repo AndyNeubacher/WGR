@@ -9,11 +9,17 @@ export async function DELETE(
   _: Request,
   ctx: { params: Promise<{ id: string; photoId: string }> },
 ) {
-  await currentUser();
+  const user = await currentUser();
   const { id, photoId } = await ctx.params;
 
   const reading = await prisma.reading.findUnique({ where: { id } });
   if (!reading) return NextResponse.json({ error: 'reading not found' }, { status: 404 });
+
+  // Technicians can only delete photos from their own readings.
+  if (user.role === 'technician' && reading.technicianId !== user.id) {
+    return NextResponse.json({ error: 'reading not found' }, { status: 404 });
+  }
+
   if (reading.primaryPhotoId === photoId) {
     return NextResponse.json({ error: 'cannot delete primary photo' }, { status: 400 });
   }

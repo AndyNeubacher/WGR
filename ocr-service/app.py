@@ -7,8 +7,14 @@ If a barcode is found with the expected format (serialnumber;calibration-month;c
 the serial number is extracted from it. Otherwise, falls back to PaddleOCR + heuristics.
 The technician verifies and corrects in the UI, so the heuristics only need to be useful, not perfect.
 """
+import os
 import re
+import logging
 from typing import Optional
+
+logging.basicConfig(level=logging.INFO)
+# Uvicorn overrides standard logging configuration, so we attach to its logger
+logger = logging.getLogger("uvicorn.error")
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
@@ -67,8 +73,23 @@ def detect_barcode(path: str) -> Optional[str]:
 
 @app.post('/ocr', response_model=OcrResponse)
 def run_ocr(req: OcrRequest):
+    logger.info(f"Received OCR request for path: {req.path}")
+
+    if not os.path.isfile(req.path):
+        logger.error(f"Invalid file path: {req.path}")
+        raise HTTPException(status_code=400, detail="Invalid file path")
+    
+    ext = os.path.splitext(req.path)[1].lower()
+    if ext not in ['.jpg', '.jpeg', '.png', '.webp', '.heic', '.heif']:
+        logger.error(f"Unsupported file extension: {ext}")
+        raise HTTPException(status_code=400, detail="Unsupported file extension")
+
     # Try barcode detection first
     barcode_serial = detect_barcode(req.path)
+    if barcode_serial:
+        logger.info(f"Detected barcode serial: {barcode_serial}")
+    else:
+        logger.info("No barcode detected, proceeding with full OCR")
 
     try:
         result = ocr.ocr(req.path, cls=True)
@@ -90,12 +111,17 @@ def run_ocr(req: OcrRequest):
             ))
             texts.append(text)
 
+    logger.info(f"Extracted {len(texts)} text blocks from OCR")
+
     # Use barcode serial if found, otherwise fall back to OCR heuristic
     serial_number = barcode_serial or pick_serial(texts)
+    consumed_volume = pick_volume(texts)
+
+    logger.info(f"Picked serial: {serial_number}, volume: {consumed_volume}")
 
     return OcrResponse(
         serialNumber=serial_number,
-        consumedVolume=pick_volume(texts),
+        consumedVolume=consumed_volume,
         raw=raw,
     )
 

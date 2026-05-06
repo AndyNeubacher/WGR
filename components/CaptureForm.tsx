@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import imageCompression from 'browser-image-compression';
 import { Button } from '@/components/ui/button';
 import { t } from '@/lib/i18n';
@@ -16,6 +16,8 @@ export function CaptureForm() {
   const [error, setError] = useState<string | null>(null);
   const [queuedOffline, setQueuedOffline] = useState(false);
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const gaugeId = searchParams.get('gaugeId') ?? undefined;
 
   // Revoke any outstanding object URL when the component unmounts — otherwise
   // a user picking a file then navigating away leaks the blob until tab close.
@@ -54,7 +56,7 @@ export function CaptureForm() {
         fileType: 'image/jpeg',
       });
       try {
-        const reading = await createReading(compressed);
+        const reading = await createReading(compressed, gaugeId);
         router.push(`/readings/${reading.id}`);
       } catch (err) {
         // HTTP errors (413/415/400/5xx) mean the server saw and rejected the

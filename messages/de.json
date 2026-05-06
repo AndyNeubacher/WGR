@@ -44,7 +44,15 @@
     "uploadFailed": "Hochladen fehlgeschlagen.",
     "loadFailed": "Daten konnten nicht geladen werden.",
     "deleteFailed": "Löschen fehlgeschlagen.",
-    "saveFailed": "Speichern fehlgeschlagen."
+    "saveFailed": "Speichern fehlgeschlagen.",
+    "invalidEmail": "Ungültige E-Mail-Adresse."
+  },
+  "login": {
+    "title": "Anmelden",
+    "email": "E-Mail",
+    "password": "Passwort",
+    "submit": "Anmelden",
+    "error": "Ungültige Anmeldedaten."
   },
   "queue": {
     "pending": "{count} Upload(s) in der Warteschlange",
@@ -54,6 +62,71 @@
   "common": {
     "back": "Zurück",
     "delete": "Löschen",
-    "cancel": "Abbrechen"
+    "cancel": "Abbrechen",
+    "save": "Speichern",
+    "logout": "Abmelden"
+  },
+  "manager": {
+    "title": "Manager",
+    "readings": "Erfassungen prüfen",
+    "readingDetails": "Erfassungsdetails",
+    "notes": "Notizen",
+    "noteForPhoto": "Notiz zum Foto",
+    "noteForSerial": "Notiz zur Seriennummer",
+    "noteForGauge": "Notiz zum Zähler",
+    "noteForSite": "Notiz zur Anlage",
+    "noGaugeError": "Funktion wird mit Anlagen-Zuordnung (Task 3) freigeschaltet",
+    "noSiteError": "Funktion wird mit Anlagen-Zuordnung (Task 3) freigeschaltet",
+    "addNote": "Notiz hinzufügen",
+    "emptyNotes": "Keine Notizen vorhanden.",
+    "placeholder": "Ihre Notiz ..."
+  },
+  "gauges": {
+    "title": "Meine Zähler",
+    "empty": "Keine Zähler zugewiesen.",
+    "takePhoto": "Foto aufnehmen",
+    "site": "Standort",
+    "customer": "Kunde"
+  },
+  "users": {
+    "title": "Nutzer",
+    "new": "Neuer Nutzer",
+    "name": "Name",
+    "email": "E-Mail",
+    "password": "Passwort",
+    "role": "Rolle",
+    "roleTechnician": "Techniker",
+    "roleManager": "Manager",
+    "create": "Nutzer anlegen",
+    "assignments": "Zähler-Zuweisung",
+    "createdAt": "Erstellt am"
+  },
+  "customers": {
+    "title": "Kunden",
+    "new": "Neuer Kunde",
+    "name": "Name",
+    "create": "Kunde anlegen",
+    "createdAt": "Erstellt am"
+  },
+  "sites": {
+    "title": "Standorte",
+    "new": "Neuer Standort",
+    "name": "Name",
+    "address": "Adresse",
+    "customer": "Kunde",
+    "create": "Standort anlegen",
+    "createdAt": "Erstellt am"
+  },
+  "gaugesAdmin": {
+    "title": "Zähler",
+    "new": "Neuer Zähler",
+    "label": "Bezeichnung",
+    "site": "Standort",
+    "customer": "Kunde",
+    "create": "Zähler anlegen",
+    "assignedTechnicians": "Zugewiesene Techniker",
+    "assign": "Zuweisen",
+    "unassign": "Entfernen",
+    "createdAt": "Erstellt am"
   }
 }

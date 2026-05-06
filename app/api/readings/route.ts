@@ -9,6 +9,28 @@ export const runtime = 'nodejs';
 
 export async function POST(req: Request) {
   const user = await currentUser();
+  const url = new URL(req.url);
+  const gaugeId = url.searchParams.get('gaugeId');
+
+  // If a gaugeId is supplied, validate it belongs to a gauge assigned to this technician.
+  // Without this check a technician could submit readings for any gauge by guessing UUIDs.
+  if (gaugeId) {
+    const assignment = await prisma.technicianGauge.findUnique({
+      where: { technicianId_gaugeId: { technicianId: user.id, gaugeId } },
+    });
+    if (!assignment) {
+      return NextResponse.json(
+        { error: 'Gauge is not assigned to this technician' },
+        { status: 403 },
+      );
+    }
+  }
+
+  const contentLength = req.headers.get('content-length');
+  if (contentLength && parseInt(contentLength, 10) > 22 * 1024 * 1024) {
+    return NextResponse.json({ error: 'payload too large' }, { status: 413 });
+  }
+
   let fd: FormData;
   try {
     fd = await req.formData();
@@ -37,16 +59,18 @@ export async function POST(req: Request) {
   try {
     reading = await prisma.$transaction(async (tx) => {
       const r = await tx.reading.create({
-        data: { technicianId: user.id, ocrStatus: 'pending' },
+        data: { technicianId: user.id, gaugeId, ocrStatus: 'pending' },
       });
       const p = await tx.photo.create({
         data: { readingId: r.id, path: stored.path },
       });
-      return tx.reading.update({
+      const updated = await tx.reading.update({
         where: { id: r.id },
         data: { primaryPhotoId: p.id },
         include: { photos: true, primaryPhoto: true },
       });
+      await enqueue('ocr', { readingId: r.id }, 0, tx);
+      return updated;
     });
   } catch (e) {
     // The file is on disk but no row references it. Best-effort cleanup before
@@ -55,14 +79,13 @@ export async function POST(req: Request) {
     throw e;
   }
 
-  await enqueue('ocr', { readingId: reading.id });
-
   return NextResponse.json(readingToDto(reading), { status: 201 });
 }
 
 export async function GET() {
-  await currentUser();
+  const user = await currentUser();
   const readings = await prisma.reading.findMany({
+    where: user.role === 'technician' ? { technicianId: user.id } : undefined,
     orderBy: { createdAt: 'desc' },
     take: 50,
     include: { photos: true, primaryPhoto: true },

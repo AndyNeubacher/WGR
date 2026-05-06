@@ -6,10 +6,20 @@ import { currentUser } from '@/lib/auth';
 export const runtime = 'nodejs';
 
 export async function POST(req: Request, ctx: { params: Promise<{ id: string }> }) {
-  await currentUser();
+  const user = await currentUser();
   const { id } = await ctx.params;
   const reading = await prisma.reading.findUnique({ where: { id } });
   if (!reading) return NextResponse.json({ error: 'not found' }, { status: 404 });
+
+  // Technicians can only add auxiliary photos to their own readings.
+  if (user.role === 'technician' && reading.technicianId !== user.id) {
+    return NextResponse.json({ error: 'not found' }, { status: 404 });
+  }
+
+  const contentLength = req.headers.get('content-length');
+  if (contentLength && parseInt(contentLength, 10) > 22 * 1024 * 1024) {
+    return NextResponse.json({ error: 'payload too large' }, { status: 413 });
+  }
 
   let fd: FormData;
   try {
