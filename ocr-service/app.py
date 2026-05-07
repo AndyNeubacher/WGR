@@ -9,6 +9,7 @@ The technician verifies and corrects in the UI, so the heuristics only need to b
 """
 import os
 import re
+import cv2
 import logging
 from typing import Optional
 
@@ -21,10 +22,15 @@ from pydantic import BaseModel
 from paddleocr import PaddleOCR
 from pyzbar import pyzbar
 import cv2
+from src.obj_detection import ObjDetection
 
 # `lang='german'` includes Latin diacritics; for digit-heavy meter dials this
 # is rarely better than 'en', but it's the right default for a German market.
 ocr = PaddleOCR(use_angle_cls=True, lang='german', show_log=False)
+
+ROBOFLOW_API_KEY = "hyav9bBDrlwRh16JGxo8"
+ROBOFLOW_MODEL_ID = "watermeter-vtc1a/3"
+obj_detection_model = ObjDetection(api_key=ROBOFLOW_API_KEY, model_id=ROBOFLOW_MODEL_ID, offline_mode=False, use_vision_model=True)
 
 app = FastAPI()
 
@@ -154,3 +160,29 @@ def pick_volume(texts: list[str]) -> Optional[float]:
     if not nums:
         return None
     return max(nums)
+
+
+if __name__ == "__main__":
+    import numpy as np
+    
+    test_image_filename = "test_210.jpg"
+    test_image_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), test_image_filename)
+    
+    try:
+        img = cv2.imdecode(np.fromfile(test_image_path, dtype=np.uint8), cv2.IMREAD_COLOR)
+    except Exception:
+        img = cv2.imread(test_image_path)
+    
+    if img is not None:
+        barcode = obj_detection_model.getBBoxImage(img, "barcode")
+        serial = obj_detection_model.getBBoxImage(img, "serialnumber")
+        consumption = obj_detection_model.getBBoxImage(img, "consumption")
+
+        if barcode is not None:     cv2.imshow("barcode", barcode)
+        if serial is not None:      cv2.imshow("serial", serial)
+        if consumption is not None: cv2.imshow("consumption", consumption)
+        
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
+    else:
+        print(f"Could not load image: {test_image_path}")
