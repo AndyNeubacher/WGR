@@ -58,30 +58,6 @@ def health():
     return {'status': 'ok'}
 
 
-def detect_barcode(path: str) -> Optional[str]:
-    """
-    Attempt to detect and decode 2D barcodes (QR codes, DataMatrix, etc.) from image.
-    Expected format: "serialnumber;calibration-month;calibration-year;type;"
-    Returns the serial number if barcode is found and valid, None otherwise.
-    """
-    try:
-        image = cv2.imread(path)
-        if image is None:
-            return None
-            
-        # Try decoding with preprocessing
-        decoded_objects = barcode_robust_decode(image)
-        
-        for obj in decoded_objects:
-            data = obj.data.decode('utf-8')
-            parts = data.split(';')
-            if len(parts) >= 1 and parts[0]:
-                return parts[0]
-    except Exception as e:
-        logger.error(f"Error in detect_barcode: {e}")
-    return None
-
-
 def barcode_robust_decode(image: np.ndarray) -> list:
     """
     Attempts to decode barcodes using multiple libraries and preprocessing steps.
@@ -137,25 +113,69 @@ def run_ocr(req: OcrRequest):
     if not os.path.isfile(req.path):
         logger.error(f"Invalid file path: {req.path}")
         raise HTTPException(status_code=400, detail="Invalid file path")
-    
+
     ext = os.path.splitext(req.path)[1].lower()
     if ext not in ['.jpg', '.jpeg', '.png', '.webp', '.heic', '.heif']:
         logger.error(f"Unsupported file extension: {ext}")
         raise HTTPException(status_code=400, detail="Unsupported file extension")
 
-    # Try barcode detection first
-    barcode_serial = detect_barcode(req.path)
-    if barcode_serial:
-        logger.info(f"Detected barcode serial: {barcode_serial}")
-    else:
-        logger.info("No barcode detected, proceeding with full OCR")
-
+    # np.fromfile + imdecode handles non-ASCII paths that cv2.imread chokes on.
     try:
-        result = ocr.ocr(req.path, cls=True)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        img = cv2.imdecode(np.fromfile(req.path, dtype=np.uint8), cv2.IMREAD_COLOR)
+    except Exception:
+        img = cv2.imread(req.path)
+
+    if img is None:
+        raise HTTPException(status_code=500, detail="Could not load image")
 
     raw: list[OcrTextEntry] = []
+
+    # 1) Serial number from the barcode region.
+    serial_number: Optional[str] = None
+    barcode_img = obj_detection_model.getBBoxImage(img, "barcode")
+    if barcode_img is not None:
+        for obj in barcode_robust_decode(barcode_img):
+            try:
+                data = obj.data.decode('utf-8')
+                parts = data.split(';')
+                if parts and parts[0]:
+                    serial_number = parts[0]
+                    logger.info(f"Detected barcode serial: {serial_number}")
+                    break
+            except Exception as e:
+                logger.error(f"Error decoding barcode payload: {e}")
+
+    # 2-3) Consumed volume from the cropped consumption region.
+    consumed_volume: Optional[float] = None
+    consumption_img = obj_detection_model.getBBoxImage(img, "consumption")
+    if consumption_img is not None:
+        try:
+            consumption_texts = _ocr_to_texts(ocr.ocr(consumption_img, cls=True), raw)
+            consumed_volume = pick_volume(consumption_texts)
+        except Exception as e:
+            logger.error(f"Error OCR-ing consumption region: {e}")
+
+    # 4-5) Serial number from the cropped serialnumber region (fallback when barcode failed).
+    if not serial_number:
+        serial_img = obj_detection_model.getBBoxImage(img, "serialnumber")
+        if serial_img is not None:
+            try:
+                serial_texts = _ocr_to_texts(ocr.ocr(serial_img, cls=True), raw)
+                serial_number = pick_serial(serial_texts)
+            except Exception as e:
+                logger.error(f"Error OCR-ing serialnumber region: {e}")
+
+    logger.info(f"Picked serial: {serial_number}, volume: {consumed_volume}")
+
+    return OcrResponse(
+        serialNumber=serial_number,
+        consumedVolume=consumed_volume,
+        raw=raw,
+    )
+
+
+def _ocr_to_texts(result, raw: list[OcrTextEntry]) -> list[str]:
+    """Flatten a PaddleOCR result, appending each entry to `raw` and returning the texts."""
     texts: list[str] = []
     for page in (result or []):
         for entry in (page or []):
@@ -169,20 +189,7 @@ def run_ocr(req: OcrRequest):
                 bbox=[[float(p[0]), float(p[1])] for p in bbox],
             ))
             texts.append(text)
-
-    logger.info(f"Extracted {len(texts)} text blocks from OCR")
-
-    # Use barcode serial if found, otherwise fall back to OCR heuristic
-    serial_number = barcode_serial or pick_serial(texts)
-    consumed_volume = pick_volume(texts)
-
-    logger.info(f"Picked serial: {serial_number}, volume: {consumed_volume}")
-
-    return OcrResponse(
-        serialNumber=serial_number,
-        consumedVolume=consumed_volume,
-        raw=raw,
-    )
+    return texts
 
 
 def pick_serial(texts: list[str]) -> Optional[str]:
