@@ -58,6 +58,54 @@ def health():
     return {'status': 'ok'}
 
 
+def detect_rotation(image: np.ndarray) -> int:
+    """
+    Detect the skew of a meter crop in degrees, rounded to the nearest int.
+    Positive = the image is tilted clockwise (top of the digit row leans right);
+    feed the returned value straight into rotate_image() to level it.
+    Returns 0 if no clear skew is found.
+    """
+    if image is None or image.size == 0:
+        return 0
+
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
+    edges = cv2.Canny(gray, 50, 150, apertureSize=3)
+
+    min_len = max(20, min(image.shape[:2]) // 4)
+    lines = cv2.HoughLinesP(edges, 1, np.pi / 180, threshold=80,
+                            minLineLength=min_len, maxLineGap=20)
+    if lines is None:
+        return 0
+
+    angles = []
+    for x1, y1, x2, y2 in lines[:, 0]:
+        a = np.degrees(np.arctan2(y2 - y1, x2 - x1))
+        # Fold to [-45, 45] so horizontal and vertical edges agree on the same skew.
+        if a < -45:
+            a += 90
+        elif a > 45:
+            a -= 90
+        angles.append(a)
+
+    return int(round(float(np.median(angles))))
+
+
+def rotate_image(image: np.ndarray, angle: float) -> np.ndarray:
+    """Rotate `image` around its center by `angle` degrees, expanding the canvas to fit."""
+    if image is None or angle == 0:
+        return image
+
+    h, w = image.shape[:2]
+    M = cv2.getRotationMatrix2D((w / 2, h / 2), angle, 1.0)
+    cos, sin = abs(M[0, 0]), abs(M[0, 1])
+    new_w = int(h * sin + w * cos)
+    new_h = int(h * cos + w * sin)
+    M[0, 2] += (new_w - w) / 2
+    M[1, 2] += (new_h - h) / 2
+    return cv2.warpAffine(image, M, (new_w, new_h),
+                          flags=cv2.INTER_CUBIC, borderValue=(255, 255, 255))
+
+
 def barcode_robust_decode(image: np.ndarray) -> list:
     """
     Attempts to decode barcodes using multiple libraries and preprocessing steps.
@@ -127,6 +175,14 @@ def run_ocr(req: OcrRequest):
 
     if img is None:
         raise HTTPException(status_code=500, detail="Could not load image")
+
+    # Detect skew from the consumption crop and level the full image before
+    # extracting any bbox we actually use — so every downstream crop is straight.
+    consumption_probe = obj_detection_model.getBBoxImage(img, "consumption")
+    rotation = detect_rotation(consumption_probe)
+    if rotation != 0:
+        logger.info(f"Leveling image by {rotation}°")
+        img = rotate_image(img, rotation)
 
     raw: list[OcrTextEntry] = []
 
@@ -222,34 +278,66 @@ def pick_volume(texts: list[str]) -> Optional[float]:
     return max(nums)
 
 
-if __name__ == "__main__":
-    
-    test_image_filename = "test_210.jpg"
-    test_image_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), test_image_filename)
-    
+
+
+def test_single_image(image_path: str, output_dir: str):
+    """
+    Run the meter pipeline on `image_path` and write the bbox crops into
+    `output_dir`. Each crop is saved as "<label>_<original_filename>", with
+    label ∈ {"barcode", "serial", "consumption"}.
+    """
+    image_name = os.path.basename(image_path)
+
     try:
-        img = cv2.imdecode(np.fromfile(test_image_path, dtype=np.uint8), cv2.IMREAD_COLOR)
+        img = cv2.imdecode(np.fromfile(image_path, dtype=np.uint8), cv2.IMREAD_COLOR)
     except Exception:
-        img = cv2.imread(test_image_path)
-    
-    if img is not None:
-        barcode = obj_detection_model.getBBoxImage(img, "barcode")
-        serial = obj_detection_model.getBBoxImage(img, "serialnumber")
-        consumption = obj_detection_model.getBBoxImage(img, "consumption")
+        img = cv2.imread(image_path)
 
-        if barcode is not None:
-            cv2.imshow("barcode", barcode)
-            decoded_objects = barcode_robust_decode(barcode)
-            if decoded_objects:
-                for obj in decoded_objects:
-                    print(f"Decoded barcode: {obj.data.decode('utf-8')}")
-            else:
-                print("Barcode match found by ObjDetection, but could not be decoded by pyzbar/pylibdmtx.")
+    if img is None:
+        print(f"Could not load image: {image_path}")
+        return
 
-        if serial is not None:      cv2.imshow("serial", serial)
-        if consumption is not None: cv2.imshow("consumption", consumption)
-        
-        cv2.waitKey(0)
-        cv2.destroyAllWindows()
-    else:
-        print(f"Could not load image: {test_image_path}")
+    consumption_initial = obj_detection_model.getBBoxImage(img, "consumption")
+    rotation = detect_rotation(consumption_initial)
+    print(f"[{image_name}] Detected rotation: {rotation}")
+    img = rotate_image(img, rotation)
+
+    crops = {
+        "barcode": obj_detection_model.getBBoxImage(img, "barcode"),
+        "serial": obj_detection_model.getBBoxImage(img, "serialnumber"),
+        "consumption": obj_detection_model.getBBoxImage(img, "consumption"),
+    }
+
+    # cv2.imencode + tofile handles non-ASCII paths that cv2.imwrite chokes on.
+    ext = os.path.splitext(image_name)[1] or ".jpg"
+    for label, crop in crops.items():
+        if crop is None:
+            continue
+        out_path = os.path.join(output_dir, f"{label}_{image_name}")
+        ok, buf = cv2.imencode(ext, crop)
+        if ok:
+            buf.tofile(out_path)
+
+    barcode = crops["barcode"]
+    if barcode is not None:
+        decoded_objects = barcode_robust_decode(barcode)
+        if decoded_objects:
+            for obj in decoded_objects:
+                print(f"  Decoded barcode: {obj.data.decode('utf-8')}")
+        else:
+            print("  Barcode crop found, but could not be decoded by pyzbar/pylibdmtx.")
+
+
+
+
+if __name__ == "__main__":
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    test_folder = os.path.join(base_dir, "test_images")
+    output_dir = os.path.join(test_folder, "crops")
+    os.makedirs(output_dir, exist_ok=True)
+
+    image_files = [f for f in os.listdir(test_folder)
+                   if f.lower().endswith(('.jpg', '.jpeg', '.png', '.webp', '.heic', '.heif'))]
+
+    for image_file in image_files:
+        test_single_image(os.path.join(test_folder, image_file), output_dir)

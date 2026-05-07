@@ -11,5 +11,6 @@ prisma/migrations/dev.db*
 ocr-service/__pycache__
 ocr-service/.venv
 ocr-service/*.egg-info
+ocr-service/test_images/
 next-env.d.ts
 tsconfig.tsbuildinfo
