@@ -21,7 +21,9 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from paddleocr import PaddleOCR
 from pyzbar import pyzbar
+from pylibdmtx import pylibdmtx
 import cv2
+import numpy as np
 from src.obj_detection import ObjDetection
 
 # `lang='german'` includes Latin diacritics; for digit-heavy meter dials this
@@ -66,15 +68,66 @@ def detect_barcode(path: str) -> Optional[str]:
         image = cv2.imread(path)
         if image is None:
             return None
-        decoded_objects = pyzbar.decode(image)
+            
+        # Try decoding with preprocessing
+        decoded_objects = barcode_robust_decode(image)
+        
         for obj in decoded_objects:
             data = obj.data.decode('utf-8')
             parts = data.split(';')
             if len(parts) >= 1 and parts[0]:
                 return parts[0]
+    except Exception as e:
+        logger.error(f"Error in detect_barcode: {e}")
+    return None
+
+
+def barcode_robust_decode(image: np.ndarray) -> list:
+    """
+    Attempts to decode barcodes using multiple libraries and preprocessing steps.
+    Returns a unified list of decoded objects.
+    """
+    if image is None:
+        return []
+        
+    results = []
+    
+    # 1. Try libraries directly
+    try:
+        results.extend(pyzbar.decode(image))
     except Exception:
         pass
-    return None
+    try:
+        results.extend(pylibdmtx.decode(image))
+    except Exception:
+        pass
+        
+    if results:
+        return results
+        
+    # 2. Try Preprocessing: Grayscale + Padding + Thresholding
+    try:
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        # Add Quiet Zone (white border)
+        padded = cv2.copyMakeBorder(gray, 30, 30, 30, 30, cv2.BORDER_CONSTANT, value=255)
+        # Binarization
+        _, thresh = cv2.threshold(padded, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        
+        #cv2.imshow("Thresholded Image", thresh)
+        
+        results.extend(pyzbar.decode(thresh))
+        results.extend(pylibdmtx.decode(thresh))
+        
+        if not results:
+            # Try one more with resizing
+            resized = cv2.resize(thresh, (0, 0), fx=2, fy=2, interpolation=cv2.INTER_LINEAR)
+            results.extend(pyzbar.decode(resized))
+            results.extend(pylibdmtx.decode(resized))
+            
+    except Exception:
+        pass
+        
+    return results
 
 
 @app.post('/ocr', response_model=OcrResponse)
@@ -163,7 +216,6 @@ def pick_volume(texts: list[str]) -> Optional[float]:
 
 
 if __name__ == "__main__":
-    import numpy as np
     
     test_image_filename = "test_210.jpg"
     test_image_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), test_image_filename)
@@ -178,7 +230,15 @@ if __name__ == "__main__":
         serial = obj_detection_model.getBBoxImage(img, "serialnumber")
         consumption = obj_detection_model.getBBoxImage(img, "consumption")
 
-        if barcode is not None:     cv2.imshow("barcode", barcode)
+        if barcode is not None:
+            cv2.imshow("barcode", barcode)
+            decoded_objects = barcode_robust_decode(barcode)
+            if decoded_objects:
+                for obj in decoded_objects:
+                    print(f"Decoded barcode: {obj.data.decode('utf-8')}")
+            else:
+                print("Barcode match found by ObjDetection, but could not be decoded by pyzbar/pylibdmtx.")
+
         if serial is not None:      cv2.imshow("serial", serial)
         if consumption is not None: cv2.imshow("consumption", consumption)
         

@@ -164,22 +164,36 @@ class ObjDetection:
                 self._load_thread.join(timeout=1.0)
 
 
-    def getBBoxImage(self, image: np.ndarray, class_name: str) -> np.ndarray | None:
-        bboxes = self._get_all_bboxes(image)
-        for bbox_info in bboxes:
-            if bbox_info.get("class") == class_name:
-                x0, y0, x1, y1 = bbox_info.get("bbox")
-                
-                # Ensure coordinates are within image bounds
-                h, w = image.shape[:2]
-                x0 = max(0, min(x0, w))
-                y0 = max(0, min(y0, h))
-                x1 = max(0, min(x1, w))
-                y1 = max(0, min(y1, h))
-                
-                if x1 > x0 and y1 > y0:
-                    return image[y0:y1, x0:x1]
-        return None
+    def _encode_frame(self, frame: np.ndarray) -> str:
+        success, buffer = cv2.imencode('.jpg', frame)
+        if not success:
+            raise ValueError("Could not encode frame as JPEG")
+        return base64.b64encode(buffer).decode('utf-8')
+
+
+    def _load_local_model(self):
+        if self._is_loading:
+            return
+            
+        self._is_loading = True
+        try:
+            print(f"Loading local model '{self.model_id}' ...")
+            from inference import get_model
+            self._local_model = get_model(self.model_id, api_key=self.api_key)
+            print(f"Local model '{self.model_id}' ready")
+            
+            if self._model_loaded_callback:
+                self._model_loaded_callback("VisionModel loaded")
+        except Exception as e:
+            import traceback
+            print(f"Could not load inference: {type(e).__name__}: {e}\n{traceback.format_exc()}")
+            self._local_model = None
+            self._local_model_failed = True
+
+            if self._model_loaded_callback:
+                self._model_loaded_callback("VisionModel failed")
+        finally:
+            self._is_loading = False
 
 
     def _get_all_bboxes(self, image: np.ndarray) -> list:
@@ -251,164 +265,19 @@ class ObjDetection:
         return bboxes
 
 
-    def _encode_frame(self, frame: np.ndarray) -> str:
-        success, buffer = cv2.imencode('.jpg', frame)
-        if not success:
-            raise ValueError("Could not encode frame as JPEG")
-        return base64.b64encode(buffer).decode('utf-8')
-
-
-    def _infer_online(self, frame: np.ndarray, class_name: str) -> np.ndarray | None:
-        try:
-            image_b64 = self._encode_frame(frame)
-            url = f"{self.api_url}/{self.model_id}?api_key={self.api_key}"
-            response = requests.post(
-                url,
-                data=image_b64,
-                headers={"Content-Type": "application/x-www-form-urlencoded"},
-                timeout=10,
-            )
-            response.raise_for_status()
-            result = response.json()
-        except requests.RequestException as e:
-            print(f"API call failed: {e}")
-            return None
-
-        predictions = result.get('predictions', [])
-        if not predictions:
-            print("No predictions returned")
-            return None
-
-        all_preds = [p for p in predictions if getattr(p, 'class_name', '') == class_name or (isinstance(p, dict) and p.get('class', '') == class_name)]
-        if not all_preds:
-            print(f"No online predictions for class '{class_name}'")
-            return None
-
-        best = max(all_preds, key=lambda p: p.get('confidence', 0.0) if isinstance(p, dict) else getattr(p, 'confidence', 0.0))
-        poly = self._extract_polygon(best, frame.shape)
-        if poly is None:
-            print("Prediction has no usable polygon/points")
-        return poly
-
-
-    def _load_local_model(self):
-        if self._is_loading:
-            return
-            
-        self._is_loading = True
-        try:
-            print(f"Loading local model '{self.model_id}' ...")
-            from inference import get_model
-            self._local_model = get_model(self.model_id, api_key=self.api_key)
-            print(f"Local model '{self.model_id}' ready")
-            
-            if self._model_loaded_callback:
-                self._model_loaded_callback("VisionModel loaded")
-        except Exception as e:
-            import traceback
-            print(f"Could not load inference: {type(e).__name__}: {e}\n{traceback.format_exc()}")
-            self._local_model = None
-            self._local_model_failed = True
-
-            if self._model_loaded_callback:
-                self._model_loaded_callback("VisionModel failed")
-        finally:
-            self._is_loading = False
-
-
-    def _infer_local(self, frame: np.ndarray, class_name: str) -> np.ndarray | None:
-        if getattr(self, '_closing', False):
-            return None
-
-        if self._local_model is None:
-            if getattr(self, '_local_model_failed', False):
-                return None
-            if not self._is_loading:
-                # retry if previous load failed or wasn't started
-                self._load_thread = threading.Thread(target=self._load_local_model, daemon=True)
-                self._load_thread.start()
-            
-            print("Local model still loading or not available - skipping detection")
-            return None
-
-        try:
-            results = self._local_model.infer(frame)
-            # results is a list of InferenceResponse objects or a single InferenceResponse
-            if not results:
-                print("No predictions (local)")
-                return None
-
-            if not isinstance(results, list):
-                results = [results]
-
-            # Flatten: each element may be a response with a .predictions list
-            all_preds = []
-            for r in results:
-                preds = getattr(r, 'predictions', None)
-                if preds:
-                    all_preds.extend(preds)
-
-            all_preds = [p for p in all_preds if getattr(p, 'class_name', '') == class_name or getattr(p, 'class', '') == class_name]
-            if not all_preds:
-                print(f"No local predictions for class '{class_name}'")
-                return None
-
-            best = max(all_preds, key=lambda p: getattr(p, 'confidence', 0.0))
-            return self._extract_polygon_from_prediction_obj(best, frame.shape)
-
-        except Exception as e:
-            print(f"Local inference failed: {e}")
-            return None
-
-
-    def _extract_polygon(self, prediction: dict, frame_shape: tuple) -> np.ndarray | None:
-        if 'points' in prediction:
-            pts = prediction['points']
-            if pts:
-                return np.array([[p['x'], p['y']] for p in pts], dtype=np.int32)
-
-        if 'contour' in prediction:
-            flat = prediction['contour']
-            if len(flat) >= 6:
-                return np.array(flat, dtype=np.float32).reshape(-1, 2).astype(np.int32)
-
-        if all(k in prediction for k in ('x', 'y', 'width', 'height')):
-            cx, cy = prediction['x'], prediction['y']
-            w, h   = prediction['width'], prediction['height']
-            x0, y0 = int(cx - w / 2), int(cy - h / 2)
-            x1, y1 = int(cx + w / 2), int(cy + h / 2)
-            return np.array([[x0, y0], [x1, y0], [x1, y1], [x0, y1]], dtype=np.int32)
-
-        return None
-
-
-    def _extract_polygon_from_prediction_obj(self, pred, frame_shape: tuple) -> np.ndarray | None:
-        points = getattr(pred, 'points', None)
-        if points:
-            try:
-                arr = np.array([[int(p.x), int(p.y)] for p in points], dtype=np.int32)
-                if len(arr) >= 3:
-                    return arr
-            except Exception:
-                pass
-
-        # Check for direct contour properties
-        # Sometimes predict API objects map direct kwargs not in `.points` struct
-        try:
-            pts = []
-            if hasattr(pred, 'contour') and isinstance(pred.contour, list) and len(pred.contour) >= 6:
-                return np.array(pred.contour, dtype=np.float32).reshape(-1, 2).astype(np.int32)
-        except Exception:
-            pass
-
-        # Bounding-box fallback
-        x  = getattr(pred, 'x', None)
-        y  = getattr(pred, 'y', None)
-        w  = getattr(pred, 'width', None)
-        h  = getattr(pred, 'height', None)
-        if all(v is not None for v in (x, y, w, h)):
-            x0, y0 = int(x - w / 2), int(y - h / 2)
-            x1, y1 = int(x + w / 2), int(y + h / 2)
-            return np.array([[x0, y0], [x1, y0], [x1, y1], [x0, y1]], dtype=np.int32)
-
+    def getBBoxImage(self, image: np.ndarray, class_name: str) -> np.ndarray | None:
+        bboxes = self._get_all_bboxes(image)
+        for bbox_info in bboxes:
+            if bbox_info.get("class") == class_name:
+                x0, y0, x1, y1 = bbox_info.get("bbox")
+                
+                # Ensure coordinates are within image bounds
+                h, w = image.shape[:2]
+                x0 = max(0, min(x0, w))
+                y0 = max(0, min(y0, h))
+                x1 = max(0, min(x1, w))
+                y1 = max(0, min(y1, h))
+                
+                if x1 > x0 and y1 > y0:
+                    return image[y0:y1, x0:x1]
         return None
