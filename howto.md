@@ -21,7 +21,7 @@ pnpm dev:all
 - `lib/storage.ts` — disk writes under `STORAGE_ROOT/yyyy/mm/<uuid>.jpg`, with path-traversal guard on read.
 - `lib/queue.ts` + `worker/index.ts` — DB-backed job queue, optimistic claim with `updateMany`, exponential backoff up to 5 attempts, SIGINT/SIGTERM-clean.
 - `lib/offline-queue.ts` — IndexedDB persistence (`idb`), replay on reconnect via the `online` window event.
-- `ocr-service/app.py` — FastAPI + PaddleOCR (`lang='german'`) on `127.0.0.1:8001`, with `pick_serial` + `pick_volume` heuristics.
+- `ocr-service/app.py` — FastAPI on `127.0.0.1:8001`. Uses a Roboflow watermeter detector to crop barcode/serial/consumption regions, decodes 2D barcodes via pyzbar/pylibdmtx for the serial, and runs a local Roboflow digit-detection model (YOLO26) for both the consumption gauge and a serial-number fallback.
 - `lib/auth.ts` — stub `currentUser()` returning a fixed dev user; every route already calls it, so task 3 swaps the body and nothing else changes.
 
 ## How to run it locally

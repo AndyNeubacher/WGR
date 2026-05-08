@@ -23,7 +23,7 @@ Only task 1 is being built now. The architecture must accept tasks 2 and 3 witho
 - **Forms**: react-hook-form + zod (schemas shared between client and server)
 - **Server state**: TanStack Query
 - **Database**: MariaDB / MySQL with **InnoDB** engine, accessed via Prisma (`provider = "mysql"`)
-- **OCR**: self-hosted **PaddleOCR** as a Python FastAPI sidecar on loopback HTTP. The Node app never imports Python.
+- **OCR**: Python FastAPI sidecar on loopback HTTP using **Roboflow inference** (local YOLO digit-detection model + watermeter region detector) + pyzbar/pylibdmtx for 2D barcodes. The Node app never imports Python.
 - **Photo storage**: local filesystem on the server, outside the public web root, served via an auth-gated Next.js route handler. No S3, no presigned URLs — world4you provides neither.
 - **Job queue**: DB-backed (`jobs` table in MariaDB), single worker, optimistic claim with stuck-row reclaim (no Redis, no `FOR UPDATE SKIP LOCKED`).
 - **PWA / offline**: IndexedDB-backed upload queue that retries on reconnect. Manifest is in place; full service worker (`@serwist/next`) is **not yet wired**.
@@ -54,7 +54,6 @@ Reading {
   serialNumber    string?               // OCR output, technician-correctable
   consumedVolume  decimal(12,3)?        // OCR output, technician-correctable
   ocrStatus       enum('pending','done','failed')
-  ocrRawJson      json?                 // full PaddleOCR response from the primary photo
   technicianNote  string?
   createdAt       datetime
   verifiedAt      datetime?             // set when technician confirms
@@ -103,7 +102,7 @@ All tables use `ENGINE=InnoDB` (default in MariaDB; pinned explicitly via Prisma
 /components/ui             # shadcn primitives
 /messages/de.json          # all German strings (custom t() helper, see lib/i18n.ts)
 /prisma/schema.prisma
-/ocr-service               # Python FastAPI + PaddleOCR sidecar
+/ocr-service               # Python FastAPI sidecar (Roboflow inference + barcode decoders)
 /worker                    # queue worker entrypoint
 /tests
 ```
@@ -141,7 +140,7 @@ Local setup recipe (MariaDB, Python venv for the OCR sidecar, `.env` template): 
 - **Upload flow (primary photo, three-step transaction)**: browser POSTs multipart to `/api/readings`. The API saves the file to `STORAGE_ROOT/yyyy/mm/<uuid>.<ext>`, then in a single Prisma transaction: (1) inserts the `Reading` row with `ocrStatus='pending'`, (2) inserts a `Photo` row with `readingId = reading.id`, (3) updates the reading to set `primaryPhotoId = photo.id`. The three steps are required because `Reading.primaryPhotoId` and `Photo.readingId` are mutually circular FKs — neither row can be inserted with both relations populated. **Anyone adding a new "create reading" entry point must replicate this pattern.** If the transaction fails after the file is on disk, the route deletes the orphaned file before propagating the error.
 - **Auxiliary photos**: from the verify page, the technician can attach more photos via `POST /api/readings/[id]/photos`. These are stored under the same path scheme but are **never** OCR'd — only the primary photo is enqueued. Auxiliary uploads currently require online connectivity; offline replay for them is deferred (see "Implemented vs deferred" below).
 - **Offline queue**: when the primary-photo POST fails, the file + metadata are persisted to IndexedDB by `lib/offline-queue.ts` and replayed on `online` events plus on every `QueueIndicator` mount. The queue indicator in the header shows online status + pending count.
-- **OCR sidecar**: Python FastAPI on `127.0.0.1:8001`, one endpoint `POST /ocr` that takes a photo path and returns `{ serialNumber, consumedVolume, raw }`. PaddleOCR is loaded once at process start (`lang='german'`). The sidecar runs under the same supervisor as the Node app.
+- **OCR sidecar**: Python FastAPI on `127.0.0.1:8001`, one endpoint `POST /ocr` that takes a photo path and returns `{ serialNumber, consumedVolume }`. The sidecar uses a Roboflow watermeter-detection model to crop barcode/serial/consumption regions, decodes 2D barcodes (pyzbar/pylibdmtx) for the serial, and runs a Roboflow digit-detection model on the consumption (and serial fallback) crops. The sidecar runs under the same supervisor as the Node app.
 - **DB queue (optimistic claim, single worker)**: `jobs (id, type, payload_json, status, attempts, run_at, locked_by, locked_until)`. Worker polls every ~2 s. Claim algorithm: `findFirst` for any pending row OR a `running` row whose `lockedUntil` has expired (stuck-job recovery), then `updateMany` filtered on the same condition to atomically transition it to `running`. If `updateMany` returns count=0 someone else won the race; we retry next tick. **No `SELECT … FOR UPDATE SKIP LOCKED`** — single-worker is the design assumption. Don't "fix" this without raising it.
 - **Auth stub → real**: every server action and route handler calls `await currentUser()` from `lib/auth.ts`. Today it returns a fixed dev user; in task 3 it returns the Auth.js v5 session. Call sites do not change.
 - **i18n**: tiny custom `t()` helper in `lib/i18n.ts` flattens `messages/de.json` to dot-keyed strings at module load. Single `de` locale. No string is hard-coded in components.

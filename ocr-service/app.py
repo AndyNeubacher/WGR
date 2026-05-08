@@ -1,17 +1,16 @@
 """
-PaddleOCR sidecar — extracts serial number + consumed volume from a meter photo.
+Sidecar — extracts serial number + consumed volume from a meter photo.
 
 The Node.js worker calls POST /ocr with {"path": "<absolute filesystem path>"}.
-This service first attempts to detect and decode 2D barcodes (QR codes, DataMatrix, etc.)
-If a barcode is found with the expected format (serialnumber;calibration-month;calibration-year;type;),
-the serial number is extracted from it. Otherwise, falls back to PaddleOCR + heuristics.
-The technician verifies and corrects in the UI, so the heuristics only need to be useful, not perfect.
+The service decodes 2D barcodes (QR / DataMatrix) on the barcode crop for the
+serial number, and runs a Roboflow digit-detection model on the consumption
+crop to read the gauge numerals. The technician verifies and corrects in the UI.
 """
 import os
-import re
 import cv2
 import logging
 from typing import Optional
+import time
 
 logging.basicConfig(level=logging.INFO)
 # Uvicorn overrides standard logging configuration, so we attach to its logger
@@ -19,20 +18,17 @@ logger = logging.getLogger("uvicorn.error")
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
-from paddleocr import PaddleOCR
 from pyzbar import pyzbar
 from pylibdmtx import pylibdmtx
 import cv2
 import numpy as np
 from src.obj_detection import ObjDetection
 
-# `lang='german'` includes Latin diacritics; for digit-heavy meter dials this
-# is rarely better than 'en', but it's the right default for a German market.
-ocr = PaddleOCR(use_angle_cls=True, lang='german', show_log=False)
-
 ROBOFLOW_API_KEY = "hyav9bBDrlwRh16JGxo8"
-ROBOFLOW_MODEL_ID = "watermeter-vtc1a/3"
-obj_detection_model = ObjDetection(api_key=ROBOFLOW_API_KEY, model_id=ROBOFLOW_MODEL_ID, offline_mode=False, use_vision_model=True)
+GAUGE_MODEL_ID = "watermeter-vtc1a/4"
+DIGIT_MODEL_ID = "gaugenumbers/2"
+obj_detection_model = ObjDetection(api_key=ROBOFLOW_API_KEY, model_id=GAUGE_MODEL_ID, offline_mode=True)
+digit_detection_model = ObjDetection(api_key=ROBOFLOW_API_KEY, model_id=DIGIT_MODEL_ID, offline_mode=True)
 
 app = FastAPI()
 
@@ -41,16 +37,9 @@ class OcrRequest(BaseModel):
     path: str
 
 
-class OcrTextEntry(BaseModel):
-    text: str
-    confidence: float
-    bbox: list[list[float]]
-
-
 class OcrResponse(BaseModel):
     serialNumber: Optional[str] = None
-    consumedVolume: Optional[float] = None
-    raw: list[OcrTextEntry]
+    consumedVolume: Optional[int] = None
 
 
 @app.get('/health')
@@ -184,9 +173,7 @@ def run_ocr(req: OcrRequest):
         logger.info(f"Leveling image by {rotation}°")
         img = rotate_image(img, rotation)
 
-    raw: list[OcrTextEntry] = []
-
-    # 1) Serial number from the barcode region.
+    # 1a) Serial number from the barcode region.
     serial_number: Optional[str] = None
     barcode_img = obj_detection_model.getBBoxImage(img, "barcode")
     if barcode_img is not None:
@@ -201,83 +188,45 @@ def run_ocr(req: OcrRequest):
             except Exception as e:
                 logger.error(f"Error decoding barcode payload: {e}")
 
-    # 2-3) Consumed volume from the cropped consumption region.
-    consumed_volume: Optional[float] = None
-    consumption_img = obj_detection_model.getBBoxImage(img, "consumption")
-    if consumption_img is not None:
-        try:
-            consumption_texts = _ocr_to_texts(ocr.ocr(consumption_img, cls=True), raw)
-            consumed_volume = pick_volume(consumption_texts)
-        except Exception as e:
-            logger.error(f"Error OCR-ing consumption region: {e}")
-
-    # 4-5) Serial number from the cropped serialnumber region (fallback when barcode failed).
+    # 1b) Fallback: detect serial-number characters on the cropped serialnumber region.
+    #     Same pattern as the gauge model — each character is its own bbox; sort
+    #     left-to-right by x-coordinate and concatenate the class names.
     if not serial_number:
         serial_img = obj_detection_model.getBBoxImage(img, "serialnumber")
         if serial_img is not None:
             try:
-                serial_texts = _ocr_to_texts(ocr.ocr(serial_img, cls=True), raw)
-                serial_number = pick_serial(serial_texts)
+                char_bboxes = digit_detection_model.getAllBBoxes(serial_img)
+                char_bboxes.sort(key=lambda b: b["bbox"][0])
+                chars = "".join(str(b.get("class", "")) for b in char_bboxes)
+                if chars:
+                    serial_number = chars
             except Exception as e:
-                logger.error(f"Error OCR-ing serialnumber region: {e}")
+                logger.error(f"Error detecting serial number characters: {e}")
+
+    # 2) Consumed volume from the cropped consumption region.
+    #    The "gaugenumbers/2" model detects each digit as its own bbox, with the
+    #    class name being the digit (e.g. "0".."9"). Sort detections left-to-right
+    #    by x-coordinate and concatenate to recover the meter reading.
+    consumed_volume: Optional[int] = None
+    consumption_img = obj_detection_model.getBBoxImage(img, "consumption")
+    if consumption_img is not None:
+        try:
+            digit_bboxes = digit_detection_model.getAllBBoxes(consumption_img)
+            digit_bboxes.sort(key=lambda b: b["bbox"][0])
+            digits = "".join(str(b.get("class", "")) for b in digit_bboxes)
+            if digits.isdigit():
+                consumed_volume = int(digits)
+            else:
+                logger.error(f"Gauge detection produced non-digit classes: {digits!r}")
+        except Exception as e:
+            logger.error(f"Error detecting gauge numbers: {e}")
 
     logger.info(f"Picked serial: {serial_number}, volume: {consumed_volume}")
 
     return OcrResponse(
         serialNumber=serial_number,
         consumedVolume=consumed_volume,
-        raw=raw,
     )
-
-
-def _ocr_to_texts(result, raw: list[OcrTextEntry]) -> list[str]:
-    """Flatten a PaddleOCR result, appending each entry to `raw` and returning the texts."""
-    texts: list[str] = []
-    for page in (result or []):
-        for entry in (page or []):
-            try:
-                bbox, (text, conf) = entry
-            except (ValueError, TypeError):
-                continue
-            raw.append(OcrTextEntry(
-                text=text,
-                confidence=float(conf),
-                bbox=[[float(p[0]), float(p[1])] for p in bbox],
-            ))
-            texts.append(text)
-    return texts
-
-
-def pick_serial(texts: list[str]) -> Optional[str]:
-    """Heuristic: longest alphanumeric token (>= 5 chars) that contains a digit."""
-    candidates: list[str] = []
-    for t in texts:
-        for tok in re.findall(r'[A-Za-z0-9\-]{5,}', t):
-            if any(c.isdigit() for c in tok):
-                candidates.append(tok)
-    if not candidates:
-        return None
-    candidates.sort(key=len, reverse=True)
-    return candidates[0]
-
-
-def pick_volume(texts: list[str]) -> Optional[float]:
-    """Heuristic: largest decimal number that fits a plausible meter reading."""
-    nums: list[float] = []
-    for t in texts:
-        for m in re.findall(r'\d{1,8}(?:[.,]\d{1,3})?', t):
-            try:
-                v = float(m.replace(',', '.'))
-            except ValueError:
-                continue
-            # Skip implausible values (years, single digits) — keep tunable.
-            if 0 < v < 1_000_000:
-                nums.append(v)
-    if not nums:
-        return None
-    return max(nums)
-
-
 
 
 def test_single_image(image_path: str, output_dir: str):
@@ -332,6 +281,42 @@ def test_single_image(image_path: str, output_dir: str):
 
 if __name__ == "__main__":
     base_dir = os.path.dirname(os.path.abspath(__file__))
+
+    try:
+        img = cv2.imdecode(np.fromfile(os.path.join(base_dir, "test_images/PXL_20260504_065648132.MP.jpg"), dtype=np.uint8), cv2.IMREAD_COLOR)
+        time.sleep(60)
+        # 1. detect and correct rotation
+        consumption_probe = obj_detection_model.getBBoxImage(img, "consumption")
+        cv2.imshow("Consumption Probe", consumption_probe)
+        rotation = detect_rotation(consumption_probe)
+        if rotation != 0:
+            logger.info(f"Leveling image by {rotation}°")
+            img = rotate_image(img, rotation)
+            cv2.imshow("Rotated Image", img)
+
+        # 2. get consumption crop
+        crop_consumption = obj_detection_model.getBBoxImage(img, "consumption")
+        if crop_consumption is None:
+            logger.error("Could not get consumption crop")
+            exit(0)
+        cv2.imshow("Consumption Crop", crop_consumption)
+
+        # 3. detect digits from cropped image
+        digit_bboxes = digit_detection_model.getAllBBoxes(crop_consumption)
+        digit_bboxes.sort(key=lambda b: b["bbox"][0])
+        digits = "".join(str(b.get("class", "")) for b in digit_bboxes)
+        print(f"Digits: {digits}")
+
+    
+        
+
+    except Exception as e:
+        logger.error(f"Error detecting gauge numbers: {e}")
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
+    exit(0)
+
+
     test_folder = os.path.join(base_dir, "test_images")
     output_dir = os.path.join(test_folder, "crops")
     os.makedirs(output_dir, exist_ok=True)

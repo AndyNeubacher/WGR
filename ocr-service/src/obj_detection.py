@@ -7,7 +7,6 @@ import threading
 import sys
 
 # Suppress inference package warnings about optional models we don't use
-os.environ.setdefault("CORE_MODELS_ENABLED", "False")
 os.environ.setdefault("CORE_MODEL_SAM_ENABLED",  "False")
 os.environ.setdefault("CORE_MODEL_SAM2_ENABLED", "False")
 os.environ.setdefault("CORE_MODEL_SAM3_ENABLED", "False")
@@ -82,13 +81,11 @@ def _stub_unused_packages():
     # Mirrors the heavy_excludes list in build_pyinstaller.py.
     # Force-stub even when installed — inference's top-level imports of these
     # packages are skipped, keeping debug startup fast.
+    # NOTE: torch/torchvision are kept loadable here so local YOLO models
+    # (e.g. yolo26) that need real torch can run. bitsandbytes is also kept
+    # off the stub list because stubbing it triggers a torch circular-import
+    # bug when inference.models.deep_lab_v3_plus is loaded.
     _heavy = [
-        "torch", "torch.cuda", "torch.nn", "torch.nn.functional",
-        "torch._C", "torch.distributed", "torch._inductor",
-        "torch.autograd", "torch.optim", "torch.utils",
-        "torch.utils.data", "torch.backends", "torch.backends.cudnn",
-        "torchvision", "torchaudio",
-        "bitsandbytes",
         "transformers", "tokenizers", "timm", "hf_xet",
         "huggingface_hub.hf_xet",
         "groundingdino",
@@ -103,7 +100,21 @@ def _stub_unused_packages():
         if _name not in sys.modules:
             sys.modules[_name] = _make_stub(_name)
 
-_stub_unused_packages()
+# Stubbing is disabled at runtime: we now want real torch / transformers /
+# bitsandbytes loaded so local inference (YOLO26 etc.) actually works.
+# The frozen production build still drops these via --exclude-module +
+# rthook_torch_stub.py, so production startup stays slim.
+# _stub_unused_packages()  # intentionally not called
+
+# Eagerly import torch BEFORE inference's lazy chain pulls it in via
+# semantic_segmentation_base. That path triggers a torch internal circular
+# import (torch.fx not yet attached) on some torch builds; importing torch
+# first lets it finish its own initialization cleanly.
+if not getattr(sys, 'frozen', False):
+    try:
+        import torch  # noqa: F401
+    except ImportError:
+        pass
 
 
 # Mock os.symlink on Windows to prevent "[WinError 1314] A required privilege is not held by the client"
@@ -132,13 +143,12 @@ SPRINGGREEN = (0, 255, 127)
 
 
 class ObjDetection:
-    def __init__(self, api_key: str, model_id: str, api_url: str = 'https://serverless.roboflow.com', offline_mode: bool = False, use_vision_model: bool = True):
+    def __init__(self, api_key: str, model_id: str, api_url: str = 'https://serverless.roboflow.com', offline_mode: bool = False):
         pass
         self.api_url = api_url
         self.api_key = api_key
         self.model_id = model_id
         self.offline = offline_mode
-        self.use_vision_model = use_vision_model
 
         # Local model (loaded lazily on first offline inference)
         self._local_model = None
@@ -148,7 +158,7 @@ class ObjDetection:
         self._closing = False
         self._load_thread = None
 
-        if self.offline and self.use_vision_model:
+        if self.offline:
             self._load_thread = threading.Thread(target=self._load_local_model, daemon=True)
             self._load_thread.start()
 
@@ -196,10 +206,7 @@ class ObjDetection:
             self._is_loading = False
 
 
-    def _get_all_bboxes(self, image: np.ndarray) -> list:
-        if not self.use_vision_model:
-            return []
-
+    def getAllBBoxes(self, image: np.ndarray) -> list:
         bboxes = []
         try:
             if self.offline:
@@ -260,13 +267,13 @@ class ObjDetection:
                             x1, y1 = int(x + w / 2), int(y + h / 2)
                             bboxes.append({"bbox": [x0, y0, x1, y1], "class": cls, "confidence": conf})
         except Exception as e:
-            print(f"_get_all_bboxes failed: {e}")
+            print(f"getAllBBoxes failed: {e}")
             
         return bboxes
 
 
     def getBBoxImage(self, image: np.ndarray, class_name: str) -> np.ndarray | None:
-        bboxes = self._get_all_bboxes(image)
+        bboxes = self.getAllBBoxes(image)
         for bbox_info in bboxes:
             if bbox_info.get("class") == class_name:
                 x0, y0, x1, y1 = bbox_info.get("bbox")

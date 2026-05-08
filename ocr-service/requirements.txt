@@ -1,10 +1,21 @@
-setuptools>=65.0
-numpy<2.0
+# Roboflow inference engine (loads YOLO26 etc. locally).
+# This pulls in torch, opencv-python, fastapi, pydantic, numpy, requests
+# and many other transitive deps; the explicit lines below pin/constrain
+# the ones we import directly so updates don't surprise us.
+inference>=1.2.7
+torch>=2.0
+
+# ASGI server. inference brings fastapi/pydantic; we keep the [standard]
+# extras here so uvicorn has websockets/httptools/watchfiles available.
+uvicorn[standard]>=0.32
+
+# Imported directly by app.py / obj_detection.py.
+fastapi>=0.115
+pydantic>=2.10
+numpy
+opencv-python
+requests
+
+# 2D-barcode decoding (not pulled in by inference).
 pyzbar>=0.1.9
 pylibdmtx>=0.1.10
-paddleocr==2.7.3
-paddlepaddle==2.6.2
-fastapi==0.115.6
-uvicorn[standard]==0.32.1
-pydantic==2.10.4
-python-multipart==0.0.20

@@ -1,7 +1,6 @@
 import { prisma } from '@/lib/db';
 import { ocrPhoto } from '@/lib/ocr';
 import { resolvePhotoPath } from '@/lib/storage';
-import type { Prisma } from '@prisma/client';
 
 export async function processOcrJob(payload: { readingId: string }): Promise<void> {
   const reading = await prisma.reading.findUnique({
@@ -18,7 +17,6 @@ export async function processOcrJob(payload: { readingId: string }): Promise<voi
       where: { id: reading.id },
       data: {
         ocrStatus: 'done',
-        ocrRawJson: result.raw as Prisma.InputJsonValue,
         serialNumber: result.serialNumber ?? null,
         consumedVolume: result.consumedVolume ?? null,
       },

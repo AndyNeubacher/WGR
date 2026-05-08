@@ -32,7 +32,6 @@ model Reading {
   serialNumber   String?   @db.VarChar(64)
   consumedVolume Decimal?  @db.Decimal(12, 3)
   ocrStatus      OcrStatus @default(pending)
-  ocrRawJson     Json?
   technicianNote String?   @db.Text
   createdAt      DateTime  @default(now())
   verifiedAt     DateTime?

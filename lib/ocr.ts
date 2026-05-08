@@ -3,7 +3,6 @@ const OCR_URL = process.env.OCR_URL ?? 'http://127.0.0.1:8001';
 export type OcrResult = {
   serialNumber: string | null;
   consumedVolume: number | null;
-  raw: unknown;
 };
 
 export async function ocrPhoto(absolutePath: string): Promise<OcrResult> {
